@@ -4,6 +4,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 import os
 import time
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,7 +30,8 @@ with conn.cursor() as c:
             id INT PRIMARY KEY AUTO_INCREMENT,
             name VARCHAR(255) NOT NULL,
             emailid VARCHAR(255) NOT NULL,
-            interview_mode VARCHAR(50) NOT NULL
+            interview_mode VARCHAR(50) NOT NULL,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
     ''')
     conn.commit()
@@ -60,6 +62,12 @@ with conn.cursor() as c:
     except pymysql.err.OperationalError as e:
         if "Duplicate column name" not in str(e):
             raise e
+    try:
+        c.execute('ALTER TABLE interview ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP')
+        conn.commit()
+    except pymysql.err.OperationalError as e:
+        if "Duplicate column name" not in str(e):
+            raise e
 
 # Dictionary of names and emails
 dict_of_names = {
@@ -79,7 +87,7 @@ dict_of_names = {
 }
 
 # Hardcoded admin password (not secure for production)
-ADMIN_PASSWORD= os.getenv('ADMIN_PASSWORD')  # Replace with your actual admin password
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')  # Replace with your actual admin password
 
 def get_email_from_name(name):
     return dict_of_names.get(name.title())
@@ -88,6 +96,11 @@ def get_candidate_names():
     with conn.cursor() as c:
         c.execute('SELECT name FROM interview')
         return [row['name'] for row in c.fetchall()]
+
+def get_recent_updates():
+    with conn.cursor() as c:
+        c.execute('SELECT name, interview_mode, last_updated FROM interview ORDER BY last_updated DESC')
+        return c.fetchall()
 
 def main():
     # Initialize session state
@@ -102,16 +115,11 @@ def main():
 
     if st.session_state.page == "main":
         st.title("Tech and Support Coordinator Role for Sabrang 2025")
-                # Login as Admin button
+        # Login as Admin button
         if st.button("Login as Admin"):
             st.session_state.page = "admin_login"
             st.rerun()
         st.write("Select your name from the dropdown below.")
-        
-        # # Login as Admin button
-        # if st.button("Login as Admin"):
-        #     st.session_state.page = "admin_login"
-        #     st.rerun()
 
         # Candidate Form
         name_options = [""] + sorted(dict_of_names.keys())
@@ -129,19 +137,33 @@ def main():
 
         # Interview mode dropdown
         interview_mode = st.selectbox("Interview Mode", ["Offline", "Online"])
-        #write a note that if error occurs try using your mobie data rather than college wifi else contact suryaansh
         st.write("If you encounter any issues, please try using mobile data instead of college Wi-Fi or contact Suryaansh.")
-                
+               
         # Submit button
         if st.button("Submit"):
             if st.session_state.name and st.session_state.email and interview_mode:
-                # Insert data into database
+                # Check if candidate already exists
                 with conn.cursor() as c:
-                    c.execute('''
-                        INSERT INTO interview (name, emailid, interview_mode, interview_status)
-                        VALUES (%s, %s, %s, %s)
-                    ''', (st.session_state.name.title(), st.session_state.email, interview_mode, 'Pending'))
-                    conn.commit()
+                    c.execute('SELECT id FROM interview WHERE name = %s', (st.session_state.name.title(),))
+                    existing = c.fetchone()
+                
+                if existing:
+                    # Update existing record
+                    with conn.cursor() as c:
+                        c.execute('''
+                            UPDATE interview 
+                            SET emailid = %s, interview_mode = %s, interview_status = %s, last_updated = CURRENT_TIMESTAMP
+                            WHERE name = %s
+                        ''', (st.session_state.email, interview_mode, 'Pending', st.session_state.name.title()))
+                        conn.commit()
+                else:
+                    # Insert new record
+                    with conn.cursor() as c:
+                        c.execute('''
+                            INSERT INTO interview (name, emailid, interview_mode, interview_status, last_updated)
+                            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        ''', (st.session_state.name.title(), st.session_state.email, interview_mode, 'Pending'))
+                        conn.commit()
                 
                 # Show success message and snowflakes with a delay
                 st.success("🎉 Submission successful! See you at the interview.")
@@ -181,6 +203,20 @@ def main():
             st.session_state.page = "main"
             st.rerun()
 
+        # Display recent updates
+        st.subheader("Recent Preference Updates")
+        recent_updates = get_recent_updates()
+        if not recent_updates:
+            st.warning("No candidates found in the database.")
+        else:
+            # Create a table for recent updates
+            st.table([
+                {"Name": row['name'], "Interview Mode": row['interview_mode'], "Last Updated": row['last_updated']}
+                for row in recent_updates
+            ])
+
+        # Existing candidate selection and details
+        st.subheader("Candidate Details")
         candidate_names = get_candidate_names()
         if not candidate_names:
             st.warning("No candidates found in the database.")
@@ -189,9 +225,13 @@ def main():
             if selected_candidate:
                 # Fetch current details
                 with conn.cursor() as c:
-                    c.execute('SELECT interview_status, good_points, bad_points, overall FROM interview WHERE name = %s', (selected_candidate,))
+                    c.execute('SELECT interview_status, good_points, bad_points, overall, interview_mode, last_updated FROM interview WHERE name = %s', (selected_candidate,))
                     result = c.fetchone()
                 
+                # Display interview mode and last updated timestamp
+                st.write(f"**Interview Mode**: {result['interview_mode']}")
+                st.write(f"**Last Updated**: {result['last_updated']}")
+
                 # Input fields for interview details
                 interview_status = st.selectbox("Interview Status", ["Pending", "Scheduled", "Done"], 
                                              index=["Pending", "Scheduled", "Done"].index(result['interview_status']) if result and result['interview_status'] else 0,
@@ -205,7 +245,7 @@ def main():
                     with conn.cursor() as c:
                         c.execute('''
                             UPDATE interview 
-                            SET interview_status = %s, good_points = %s, bad_points = %s, overall = %s
+                            SET interview_status = %s, good_points = %s, bad_points = %s, overall = %s, last_updated = CURRENT_TIMESTAMP
                             WHERE name = %s
                         ''', (interview_status, good_points, bad_points, overall, selected_candidate))
                         conn.commit()
