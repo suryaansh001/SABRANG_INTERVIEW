@@ -129,7 +129,9 @@ def main():
 
         # Interview mode dropdown
         interview_mode = st.selectbox("Interview Mode", ["Offline", "Online"])
-
+        #write a note that if error occurs try using your mobie data rather than college wifi else contact suryaansh
+        st.write("If you encounter any issues, please try using mobile data instead of college Wi-Fi or contact Suryaansh.")
+                
         # Submit button
         if st.button("Submit"):
             if st.session_state.name and st.session_state.email and interview_mode:
